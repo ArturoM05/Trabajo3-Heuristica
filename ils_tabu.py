@@ -34,7 +34,9 @@ import time
 import random
 from constructive import ConstructiveAlgorithm
 from vnd import evaluate_sequence
-from vnd import _one_pass_two_opt, _one_pass_swap, _one_pass_insertion
+from vnd import _two_opt_FI as _one_pass_two_opt
+from vnd import _swap_FI as _one_pass_swap
+from vnd import _insertion_FI as _one_pass_insertion
 
 # Tiempo máximo (s) por búsqueda local interna
 LOCAL_TIME_LIMIT = 600  # 10 minutos
