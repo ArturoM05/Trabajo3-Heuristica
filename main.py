@@ -30,6 +30,11 @@ from read_instances import read_nwjssp_instance
 
 # Modo de ejecución: "final" | "parametric"
 MODE = "final"
+# En modo final puede ejecutarse solo un algoritmo si se especifica:
+#   FINAL_ALGO_MODE=vnd      -> solo VND
+#   FINAL_ALGO_MODE=ils      -> solo ILS-Tabú
+#   FINAL_ALGO_MODE=both     -> ambos (comportamiento por defecto)
+FINAL_ALGO_MODE = os.getenv("FINAL_ALGO_MODE", "both").lower()
 
 # Directorio con los archivos .txt de instancias
 INSTANCES_DIR = "instances"
@@ -209,14 +214,35 @@ def run_batch(instance_files, algo_fn, label, output_file, time_limit, params):
 def run_final(instance_files):
     print("\n" + "=" * 75)
     print("MODO FINAL  –  Configuraciones definitivas")
+    print(f"Algoritmo(s): {FINAL_ALGO_MODE.upper()}")
     print("=" * 75)
 
-    configs = [
-        (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
-         "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
-        (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
-         "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
-    ]
+    configs = []
+    if FINAL_ALGO_MODE in ("both", "all", ""):
+        configs = [
+            (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
+             "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
+            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
+             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+        ]
+    elif FINAL_ALGO_MODE == "vnd":
+        configs = [
+            (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
+             "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
+        ]
+    elif FINAL_ALGO_MODE in ("ils", "ils_tabu"):
+        configs = [
+            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
+             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+        ]
+    else:
+        print(f"Advertencia: FINAL_ALGO_MODE='{FINAL_ALGO_MODE}' no reconocido. Ejecutando ambos algoritmos.")
+        configs = [
+            (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
+             "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
+            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
+             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+        ]
 
     summary = []
     for fn, label, outfile, tl, params in configs:
