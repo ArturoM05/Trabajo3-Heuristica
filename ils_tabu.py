@@ -39,34 +39,31 @@ LOCAL_TIME_LIMIT = 60   # 1 minuto por llamada a _local_search
 # Búsqueda local interna: VND (N1→N2→N3, estrategias BI/BI/FI por defecto)
 # ---------------------------------------------------------------------------
 
-def _local_search(job_sequence, algo, max_range, deadline,
-                  improve_n1="BI", improve_n2="BI", improve_n3="FI"):
+def _local_search(job_sequence, algo, max_range, deadline):
     """
-    VND interno: cicla por N1=2-opt, N2=Swap-range, N3=Insertion-range
-    hasta que ninguno mejora o se alcanza deadline.
-    Retorna (secuencia, flow_time, starts, n_calls) donde n_calls es el
-    número de evaluaciones de vecindario realizadas.
-    """
-    _N1 = _two_opt_BI  if improve_n1 == "BI" else _two_opt_FI
-    _N2 = _swap_BI     if improve_n2 == "BI" else _swap_FI
-    _N3 = _insertion_BI if improve_n3 == "BI" else _insertion_FI
+    Búsqueda local rápida para usar como subrutina del ILS:
+    hace UNA sola pasada de cada vecindario (N1→N2→N3) sin reiniciar.
+    Esto mantiene el costo por llamada bajo y permite que el ILS itere
+    muchas veces dentro del presupuesto de tiempo.
 
+    Retorna (secuencia, flow_time, starts, n_calls) donde n_calls cuenta
+    cuántas pasadas de vecindario se ejecutaron.
+    """
     n_calls = 0
-    j = 1
-    while j <= 3 and time.time() < deadline:
-        if j == 1:
-            new_seq, new_flow, new_starts, improved = _N1(job_sequence, algo, deadline)
-        elif j == 2:
-            new_seq, new_flow, new_starts, improved = _N2(job_sequence, algo, max_range, deadline)
+    for fn, needs_range in [
+        (_two_opt_FI, False),   # N1: rápido, first-improvement
+        (_swap_FI,    True),    # N2: first-improvement para ser ligero
+        (_insertion_FI, True),  # N3: first-improvement
+    ]:
+        if time.time() >= deadline:
+            break
+        if needs_range:
+            new_seq, new_flow, new_starts, improved = fn(job_sequence, algo, max_range, deadline)
         else:
-            new_seq, new_flow, new_starts, improved = _N3(job_sequence, algo, max_range, deadline)
-
+            new_seq, new_flow, new_starts, improved = fn(job_sequence, algo, deadline)
         n_calls += 1
         if improved:
             job_sequence = new_seq
-            j = 1
-        else:
-            j += 1
 
     flow, starts = evaluate_sequence(job_sequence, algo)
     return job_sequence, flow, starts, n_calls
