@@ -1,198 +1,205 @@
 """
 ILS-Tabú con Memoria de Frecuencia para NWJSSP
 ================================================
-Metaheurístico que combina tres elementos del enunciado:
+Combina tres elementos del enunciado:
 
-1. PERTURBACIÓN / MUTACIÓN  (ILS – Iterated Local Search)
-   - En cada iteración se perturba la solución actual con un double-bridge
-     adaptado a permutaciones lineales: se extraen k trabajos al azar y se
-     reinsertan en posiciones aleatorias distintas. Esto escapa de óptimos
-     locales sin destruir demasiado la solución.
+1. PERTURBACIÓN / MUTACIÓN  (ILS)
+   En cada iteración se perturba la solución con un double-bridge adaptado:
+   se extraen k trabajos al azar y se reinsertan en posiciones distintas.
 
-2. MEMORIA DE CORTO PLAZO – Lista Tabú (basada en recencia)
-   - Se prohíbe revertir movimientos recientes. La lista tabú almacena los
-     pares (job_i, job_j) de los últimos tabu_tenure iteraciones.
-   - Un movimiento swap (i,j) es tabú si el par de trabajos en esas
-     posiciones aparece en la lista. Se permite igualmente si el vecino
-     supera la mejor solución global (criterio de aspiración).
+2. MEMORIA DE CORTO PLAZO – Lista Tabú (recencia)
+   Prohíbe repetir los últimos tabu_tenure movimientos (pares de posiciones
+   intercambiadas). Criterio de aspiración: se permite si supera el mejor global.
 
 3. MEMORIA DE LARGO PLAZO – Frecuencia
-   - Se lleva un contador de cuántas veces cada trabajo ha sido movido.
-   - Cada cierto número de iteraciones sin mejora global
-     (diversification_trigger), se aplica diversificación: se generan
-     múltiples perturbaciones sesgadas hacia trabajos poco frecuentes y
-     se elige la que produce mejor flow_time tras una búsqueda local rápida.
+   Cuenta cuántas veces cada trabajo fue desplazado de su posición.
+   Tras diversification_trigger iteraciones sin mejora global se generan
+   n_diverse_candidates perturbaciones sesgadas hacia los trabajos más
+   frecuentes y se elige la que produce mejor resultado tras búsqueda local.
 
-Búsqueda local interna: VND ligero (N1=2-opt, N2=Swap-10) con tiempo
-máximo LOCAL_TIME_LIMIT segundos para no consumir todo el presupuesto en
-una sola iteración.
-
-Criterio de parada: tiempo límite configurable (por defecto 3600 s = 1 h).
+Búsqueda local interna: VND (N1=2-opt-BI, N2=Swap-BI, N3=Insertion-FI)
+con tope de LOCAL_TIME_LIMIT segundos POR PASADA COMPLETA del VND,
+lo que garantiza múltiples iteraciones del ILS dentro de la hora.
 """
 
 import time
 import random
 from constructive import ConstructiveAlgorithm
-from vnd import evaluate_sequence
-from vnd import _one_pass_two_opt, _one_pass_swap, _one_pass_insertion
+from vnd import (evaluate_sequence,
+                 _two_opt_BI, _two_opt_FI,
+                 _swap_BI,    _swap_FI,
+                 _insertion_BI, _insertion_FI)
 
-# Tiempo máximo (s) por búsqueda local interna
-LOCAL_TIME_LIMIT = 600  # 10 minutos
+# Tope de tiempo por llamada a búsqueda local interna.
+# Valor conservador para que el ILS pueda iterar decenas de veces en 1 hora.
+LOCAL_TIME_LIMIT = 60   # 1 minuto por llamada a _local_search
 
 
 # ---------------------------------------------------------------------------
-# Búsqueda local interna: VND ligero (N1 + N2 + N3)
+# Búsqueda local interna: VND (N1→N2→N3, estrategias BI/BI/FI por defecto)
 # ---------------------------------------------------------------------------
 
-def _local_search(job_sequence, algo, max_range, deadline):
+def _local_search(job_sequence, algo, max_range, deadline,
+                  improve_n1="BI", improve_n2="BI", improve_n3="FI"):
     """
-    VND interno con N1=2-opt, N2=Swap-range, N3=Insertion-range.
-    Se detiene cuando ningún vecindario mejora o se alcanza el deadline.
+    VND interno: cicla por N1=2-opt, N2=Swap-range, N3=Insertion-range
+    hasta que ninguno mejora o se alcanza deadline.
+    Retorna (secuencia, flow_time, starts, n_calls) donde n_calls es el
+    número de evaluaciones de vecindario realizadas.
     """
-    current_flow, current_starts = evaluate_sequence(job_sequence, algo)
+    _N1 = _two_opt_BI  if improve_n1 == "BI" else _two_opt_FI
+    _N2 = _swap_BI     if improve_n2 == "BI" else _swap_FI
+    _N3 = _insertion_BI if improve_n3 == "BI" else _insertion_FI
+
+    n_calls = 0
     j = 1
     while j <= 3 and time.time() < deadline:
         if j == 1:
-            new_seq, new_flow, new_starts, improved = _one_pass_two_opt(
-                job_sequence, algo, deadline
-            )
+            new_seq, new_flow, new_starts, improved = _N1(job_sequence, algo, deadline)
         elif j == 2:
-            new_seq, new_flow, new_starts, improved = _one_pass_swap(
-                job_sequence, algo, max_range, deadline
-            )
+            new_seq, new_flow, new_starts, improved = _N2(job_sequence, algo, max_range, deadline)
         else:
-            new_seq, new_flow, new_starts, improved = _one_pass_insertion(
-                job_sequence, algo, max_range, deadline
-            )
+            new_seq, new_flow, new_starts, improved = _N3(job_sequence, algo, max_range, deadline)
 
+        n_calls += 1
         if improved:
             job_sequence = new_seq
-            current_flow = new_flow
-            current_starts = new_starts
             j = 1
         else:
             j += 1
 
-    return job_sequence, current_flow, current_starts
+    flow, starts = evaluate_sequence(job_sequence, algo)
+    return job_sequence, flow, starts, n_calls
 
 
 # ---------------------------------------------------------------------------
-# Perturbación: double-bridge adaptado a permutaciones (ILS)
+# Perturbación (ILS): double-bridge adaptado a permutaciones lineales
 # ---------------------------------------------------------------------------
 
 def _perturb(job_sequence, k, rng):
     """
     Extrae k trabajos en posiciones aleatorias y los reinserta en
-    posiciones distintas también aleatorias. Garantiza que la secuencia
-    resultante es diferente a la original (k ≥ 2).
+    posiciones distintas. k se clampea a [2, n//2].
+    Retorna (nueva_secuencia, set_de_posiciones_modificadas).
     """
     n = len(job_sequence)
     k = max(2, min(k, n // 2))
     seq = job_sequence[:]
 
-    positions = rng.sample(range(n), k)
-    jobs_extracted = [seq[p] for p in sorted(positions)]
+    positions = sorted(rng.sample(range(n), k))
+    jobs_out  = [seq[p] for p in positions]
 
-    # Eliminar los trabajos de la secuencia
-    remaining = [j for j in seq if j not in jobs_extracted]
+    # Eliminar extraídos
+    remaining = [j for j in seq if j not in set(jobs_out)]
 
-    # Insertar en posiciones nuevas aleatorias
-    for job in jobs_extracted:
-        insert_pos = rng.randint(0, len(remaining))
-        remaining.insert(insert_pos, job)
+    # Reinsertar en posiciones nuevas
+    for job in jobs_out:
+        pos = rng.randint(0, len(remaining))
+        remaining.insert(pos, job)
 
-    return remaining
+    # Registrar qué posiciones cambiaron
+    changed_pos = {i for i in range(n) if remaining[i] != job_sequence[i]}
+    return remaining, changed_pos
 
 
 # ---------------------------------------------------------------------------
-# Perturbación sesgada por frecuencia (diversificación)
+# Perturbación sesgada (diversificación por frecuencia)
 # ---------------------------------------------------------------------------
 
 def _perturb_biased(job_sequence, freq_counter, k, rng):
     """
-    Perturbación que prioriza mover los trabajos con mayor frecuencia acumulada
-    (los más visitados), forzando diversificación.
+    Como _perturb pero los trabajos a extraer se eligen con probabilidad
+    proporcional a su frecuencia acumulada (los más movidos tienen más
+    probabilidad de ser perturbados → fuerza diversificación).
     """
     n = len(job_sequence)
     k = max(2, min(k, n // 2))
     seq = job_sequence[:]
 
-    # Pesos inversamente proporcionales a la frecuencia (más frecuente = más probable)
-    weights = [freq_counter.get(j, 0) + 1 for j in seq]
-    total = sum(weights)
-    probs = [w / total for w in weights]
+    weights = [freq_counter[j] + 1 for j in seq]   # +1 para evitar peso 0
+    total   = sum(weights)
+    probs   = [w / total for w in weights]
 
-    # Selección ponderada sin reemplazo
-    chosen = []
-    pool = list(range(n))
-    pool_probs = probs[:]
+    chosen, pool, pool_p = [], list(range(n)), probs[:]
     for _ in range(k):
         if not pool:
             break
-        r = rng.random()
-        cumulative = 0.0
-        for idx, p in enumerate(pool_probs):
-            cumulative += p
-            if r <= cumulative:
+        r, cum = rng.random(), 0.0
+        for idx, p in enumerate(pool_p):
+            cum += p
+            if r <= cum:
                 chosen.append(pool[idx])
-                pool.pop(idx)
-                pool_probs.pop(idx)
-                s = sum(pool_probs)
+                pool.pop(idx); pool_p.pop(idx)
+                s = sum(pool_p)
                 if s > 0:
-                    pool_probs = [pp / s for pp in pool_probs]
+                    pool_p = [pp / s for pp in pool_p]
                 break
 
-    jobs_extracted = [seq[p] for p in sorted(chosen)]
-    remaining = [j for j in seq if j not in jobs_extracted]
-    for job in jobs_extracted:
-        insert_pos = rng.randint(0, len(remaining))
-        remaining.insert(insert_pos, job)
+    jobs_out  = [seq[p] for p in sorted(chosen)]
+    remaining = [j for j in seq if j not in set(jobs_out)]
+    for job in jobs_out:
+        remaining.insert(rng.randint(0, len(remaining)), job)
 
-    return remaining
+    changed_pos = {i for i in range(n) if remaining[i] != job_sequence[i]}
+    return remaining, changed_pos
 
 
 # ---------------------------------------------------------------------------
-# Lista tabú
+# Lista Tabú  (basada en recencia, sobre pares de posiciones)
 # ---------------------------------------------------------------------------
 
 class TabuList:
-    """Lista tabú basada en recencia: almacena pares (job_a, job_b) de los
-    últimos `tenure` iteraciones."""
+    """
+    Almacena los pares de posiciones (i, j) intercambiadas en los últimos
+    `tenure` movimientos aceptados. Un movimiento es tabú si su par de
+    posiciones aparece en la lista.
+    """
 
     def __init__(self, tenure: int):
         self.tenure = tenure
-        self._list = []          # [(job_a, job_b), ...]  más reciente al final
+        self._entries = []   # [(pos_i, pos_j), ...]
 
     def is_tabu(self, move):
-        """move es una tupla (job_a, job_b) con job_a <= job_b."""
-        return move in self._list
+        return move in self._entries
 
     def add(self, move):
-        self._list.append(move)
-        if len(self._list) > self.tenure:
-            self._list.pop(0)
+        self._entries.append(move)
+        if len(self._entries) > self.tenure:
+            self._entries.pop(0)
 
     def clear(self):
-        self._list.clear()
+        self._entries.clear()
+
+
+def _extract_tabu_move(seq_before, seq_after):
+    """
+    Compara dos secuencias y devuelve el par de posiciones que cambiaron
+    como tupla ordenada (min_pos, max_pos), o None si no hay exactamente 2.
+    """
+    diffs = [i for i in range(len(seq_before)) if seq_before[i] != seq_after[i]]
+    if len(diffs) >= 2:
+        return (diffs[0], diffs[-1])
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Clase principal ILSTabuSearch
+# Clase principal
 # ---------------------------------------------------------------------------
 
 class ILSTabuSearch:
     """
-    ILS + Lista Tabú + Memoria de frecuencia para NWJSSP.
+    ILS + Lista Tabú + Memoria de Frecuencia para NWJSSP.
 
-    Parámetros:
-        max_range             : rango máximo para swap e insertion (default 10)
-        time_limit            : tiempo total máximo en segundos (default 3600)
-        tabu_tenure           : longitud de la lista tabú (default 15)
-        perturbation_k        : trabajos a mover en cada perturbación (default 4)
-        diversification_trigger: iteraciones sin mejora global antes de
-                                 diversificar con memoria de frecuencia (default 20)
-        n_diverse_candidates  : candidatos generados en diversificación (default 5)
-        seed                  : semilla aleatoria (default 42)
+    Parámetros
+    ----------
+    max_range              : rango máximo para Swap e Insertion   (default 10)
+    time_limit             : tiempo total máximo en segundos       (default 3600)
+    tabu_tenure            : longitud de la lista tabú             (default 15)
+    perturbation_k         : trabajos a mover en cada perturbación (default 4)
+    diversification_trigger: iteraciones sin mejora antes de       (default 20)
+                             diversificar con memoria de frecuencia
+    n_diverse_candidates   : candidatos en la fase de diversif.    (default 5)
+    seed                   : semilla aleatoria                     (default 42)
     """
 
     def __init__(self, n, m, operations, release_dates,
@@ -216,134 +223,111 @@ class ILSTabuSearch:
         self.rng = random.Random(seed)
         self._algo = ConstructiveAlgorithm(n, m, operations, release_dates)
 
-    # ------------------------------------------------------------------
-
-    def _make_tabu_move(self, seq_before, seq_after):
-        """Extrae el par de trabajos intercambiados (para lista tabú)."""
-        diffs = [(i, seq_before[i], seq_after[i])
-                 for i in range(len(seq_before)) if seq_before[i] != seq_after[i]]
-        if len(diffs) >= 2:
-            jobs = tuple(sorted([diffs[0][1], diffs[1][1]]))
-            return jobs
-        return None
-
-    # ------------------------------------------------------------------
-
     def solve(self, initial_solution=None):
         """
         Ejecuta ILS-Tabú con memoria de frecuencia.
 
-        Returns:
-            job_start_times  : tiempos de inicio de cada trabajo
-            flow_time        : suma de tiempos de completación
-            computation_time : tiempo de cómputo en milisegundos
+        Returns
+        -------
+        job_start_times  : tiempos de inicio de cada trabajo
+        flow_time        : suma de tiempos de completación
+        computation_time : tiempo de cómputo en milisegundos
+        ls_calls         : total de llamadas a búsquedas locales internas
         """
-        start_computation = time.time()
-        global_deadline = start_computation + self.time_limit
+        start_t = time.time()
+        deadline = start_t + self.time_limit
 
         # ── Solución inicial ──────────────────────────────────────────
         if initial_solution is None:
             initial_solution, _, _ = self._algo.solve()
 
-        job_sequence = sorted(range(self.n), key=lambda jj: initial_solution[jj])
+        seq = sorted(range(self.n), key=lambda jj: initial_solution[jj])
 
-        # Búsqueda local inicial
-        ls_deadline = min(global_deadline, time.time() + LOCAL_TIME_LIMIT)
-        job_sequence, current_flow, current_starts = _local_search(
-            job_sequence, self._algo, self.max_range, ls_deadline
+        # Búsqueda local inicial (tope = LOCAL_TIME_LIMIT)
+        ls_dl = min(deadline, time.time() + LOCAL_TIME_LIMIT)
+        seq, cur_flow, cur_starts, calls = _local_search(
+            seq, self._algo, self.max_range, ls_dl
         )
+        ls_calls = calls
 
-        best_sequence = job_sequence[:]
-        best_flow     = current_flow
-        best_starts   = current_starts
+        best_seq, best_flow, best_starts = seq[:], cur_flow, cur_starts
 
         # ── Estructuras de memoria ────────────────────────────────────
-        tabu_list = TabuList(self.tabu_tenure)
-        freq_counter = {j: 0 for j in range(self.n)}   # memoria de largo plazo
+        tabu = TabuList(self.tabu_tenure)
+        # freq_counter[job_id] = nº de veces que ese trabajo fue desplazado
+        freq_counter = {j: 0 for j in range(self.n)}
+        no_improve = 0   # iteraciones sin mejora del mejor global
 
-        no_improve_count = 0   # iteraciones sin mejora de la mejor solución global
-
-        # ── Bucle principal ───────────────────────────────────────────
-        while time.time() < global_deadline:
+        # ── Bucle principal ILS ───────────────────────────────────────
+        while time.time() < deadline:
 
             # ── DIVERSIFICACIÓN (memoria de largo plazo) ──────────────
-            if no_improve_count >= self.diversification_trigger:
-                best_candidate_seq  = None
-                best_candidate_flow = float('inf')
+            if no_improve >= self.diversification_trigger:
+                remaining_t = deadline - time.time()
+                # Repartir el tiempo disponible entre los candidatos
                 ls_budget = min(LOCAL_TIME_LIMIT,
-                                (global_deadline - time.time()) / (self.n_diverse_candidates + 1))
+                                remaining_t / (self.n_diverse_candidates + 1))
+
+                best_cand_seq, best_cand_flow = None, float('inf')
 
                 for _ in range(self.n_diverse_candidates):
-                    if time.time() >= global_deadline:
+                    if time.time() >= deadline:
                         break
-                    cand = _perturb_biased(
-                        best_sequence, freq_counter, self.perturbation_k, self.rng
+                    cand, _ = _perturb_biased(
+                        best_seq, freq_counter, self.perturbation_k, self.rng
                     )
-                    ls_dl = min(global_deadline, time.time() + ls_budget)
-                    cand, cand_flow, _ = _local_search(
-                        cand, self._algo, self.max_range, ls_dl
+                    cand_dl = min(deadline, time.time() + ls_budget)
+                    cand, cand_flow, _, c = _local_search(
+                        cand, self._algo, self.max_range, cand_dl
                     )
-                    if cand_flow < best_candidate_flow:
-                        best_candidate_flow = cand_flow
-                        best_candidate_seq  = cand
+                    ls_calls += c
+                    if cand_flow < best_cand_flow:
+                        best_cand_flow, best_cand_seq = cand_flow, cand[:]
 
-                if best_candidate_seq is not None:
-                    job_sequence  = best_candidate_seq
-                    current_flow  = best_candidate_flow
-                    current_flow, current_starts = evaluate_sequence(
-                        job_sequence, self._algo
-                    )
-                    tabu_list.clear()   # reiniciar lista tabú tras diversificación
-                    no_improve_count = 0
+                if best_cand_seq is not None:
+                    seq      = best_cand_seq
+                    cur_flow, cur_starts = evaluate_sequence(seq, self._algo)
+                    tabu.clear()
+                    no_improve = 0
 
-                    if current_flow < best_flow:
-                        best_flow     = current_flow
-                        best_sequence = job_sequence[:]
-                        best_starts   = current_starts
-                    continue
+                    if cur_flow < best_flow:
+                        best_flow, best_seq, best_starts = cur_flow, seq[:], cur_starts
+                continue   # reiniciar loop tras diversificación
 
             # ── PERTURBACIÓN (ILS) ────────────────────────────────────
-            prev_sequence = job_sequence[:]
-            perturbed = _perturb(job_sequence, self.perturbation_k, self.rng)
+            prev_seq = seq[:]
+            perturbed, changed_pos = _perturb(seq, self.perturbation_k, self.rng)
 
-            # Actualizar frecuencia de los trabajos movidos
-            moved = set(prev_sequence) - set(
-                p for p, q in zip(prev_sequence, perturbed) if p == q
+            # Actualizar frecuencia: incrementar contador de cada trabajo
+            # que cambió de posición
+            for pos in changed_pos:
+                freq_counter[perturbed[pos]] += 1
+
+            # ── BÚSQUEDA LOCAL ────────────────────────────────────────
+            ls_dl = min(deadline, time.time() + LOCAL_TIME_LIMIT)
+            new_seq, new_flow, new_starts, c = _local_search(
+                perturbed, self._algo, self.max_range, ls_dl
             )
-            for job in perturbed:
-                if job in moved:
-                    freq_counter[job] += 1
+            ls_calls += c
 
-            # ── BÚSQUEDA LOCAL tras perturbación ──────────────────────
-            ls_deadline = min(global_deadline, time.time() + LOCAL_TIME_LIMIT)
-            new_seq, new_flow, new_starts = _local_search(
-                perturbed, self._algo, self.max_range, ls_deadline
-            )
-
-            # ── CRITERIO DE ACEPTACIÓN (lista tabú + aspiración) ──────
-            move = self._make_tabu_move(prev_sequence, new_seq)
-            is_tabu = (move is not None) and tabu_list.is_tabu(move)
-            aspiration = new_flow < best_flow   # criterio de aspiración
+            # ── CRITERIO DE ACEPTACIÓN (tabú + aspiración) ────────────
+            tabu_move = _extract_tabu_move(prev_seq, new_seq)
+            is_tabu   = (tabu_move is not None) and tabu.is_tabu(tabu_move)
+            aspiration = new_flow < best_flow
 
             if (not is_tabu) or aspiration:
-                job_sequence  = new_seq
-                current_flow  = new_flow
-                current_starts = new_starts
+                seq, cur_flow, cur_starts = new_seq, new_flow, new_starts
 
-                if move is not None:
-                    tabu_list.add(move)
+                if tabu_move is not None:
+                    tabu.add(tabu_move)
 
-                # Actualizar mejor solución global
-                if current_flow < best_flow:
-                    best_flow     = current_flow
-                    best_sequence = job_sequence[:]
-                    best_starts   = current_starts
-                    no_improve_count = 0
+                if cur_flow < best_flow:
+                    best_flow, best_seq, best_starts = cur_flow, seq[:], cur_starts
+                    no_improve = 0
                 else:
-                    no_improve_count += 1
+                    no_improve += 1
             else:
-                # Movimiento tabú sin criterio de aspiración: descartar
-                no_improve_count += 1
+                no_improve += 1   # movimiento tabú descartado
 
-        computation_time = (time.time() - start_computation) * 1000
-        return best_starts, best_flow, computation_time
+        comp_time = (time.time() - start_t) * 1000
+        return best_starts, best_flow, comp_time, ls_calls

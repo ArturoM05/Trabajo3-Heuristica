@@ -153,21 +153,22 @@ def _initial_solution(n, m, operations, release_dates):
 def run_vnd(n, m, operations, release_dates, time_limit=TIME_LIMIT, **params):
     sol0 = _initial_solution(n, m, operations, release_dates)
     algo = VNDSearch(n, m, operations, release_dates, time_limit=time_limit, **params)
-    return algo.solve(initial_solution=sol0)
+    starts, flow, comp = algo.solve(initial_solution=sol0)
+    return starts, flow, comp, None   # ls_calls no aplica para VND
 
 
 def run_ils_tabu(n, m, operations, release_dates, time_limit=TIME_LIMIT, **params):
     sol0 = _initial_solution(n, m, operations, release_dates)
     algo = ILSTabuSearch(n, m, operations, release_dates, time_limit=time_limit, **params)
-    return algo.solve(initial_solution=sol0)
+    return algo.solve(initial_solution=sol0)   # devuelve (starts, flow, comp, ls_calls)
 
 
 def process_instance(instance_file, algo_fn, time_limit, params):
     try:
         n, m, ops, rd, _ = read_nwjssp_instance(instance_file)
-        sol, ft, ct = algo_fn(n, m, ops, rd, time_limit=time_limit, **params)
+        starts, ft, ct, ls_calls = algo_fn(n, m, ops, rd, time_limit=time_limit, **params)
         name = os.path.splitext(os.path.basename(instance_file))[0]
-        return name, sol, ft, ct
+        return name, starts, ft, ct, ls_calls
     except Exception as e:
         print(f"  Error procesando {instance_file}: {e}")
         return None
@@ -180,20 +181,24 @@ def run_batch(instance_files, algo_fn, label, output_file, time_limit, params):
 
     wb = create_results_workbook()
     total_time = 0
+    total_calls = 0
     count = 0
 
     for f in instance_files:
         result = process_instance(f, algo_fn, time_limit, params)
         if result:
-            name, sol, ft, ct = result
-            print(f"    {name:28s} | Z={ft:12.0f} | t={ct:10.2f}ms")
+            name, sol, ft, ct, ls_calls = result
+            calls_str = f"{ls_calls:6d}" if ls_calls is not None else "   N/A"
+            print(f"    {name:28s} | Z={ft:12.0f} | t={ct:10.2f}ms | LS calls={calls_str}")
             total_time += ct
+            total_calls += ls_calls if ls_calls is not None else 0
             count += 1
             add_results_sheet(wb, name, ft, ct, sol)
 
     wb.save(output_file)
     avg = total_time / count if count > 0 else 0
-    print(f"\n  ✓ {output_file}  (inst={count}, total={total_time/1000:.2f}s, avg={avg:.2f}ms)")
+    avg_calls = total_calls / count if count > 0 else 0
+    print(f"\n  ✓ {output_file}  (inst={count}, total={total_time/1000:.2f}s, avg={avg:.2f}ms, avg_ls_calls={avg_calls:.1f})")
     return total_time, count
 
 
