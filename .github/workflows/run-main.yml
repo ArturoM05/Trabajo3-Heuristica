@@ -3,6 +3,9 @@ name: Run NWJSSP Program
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-final-vnd:
     name: Run program in final mode (VND only)
