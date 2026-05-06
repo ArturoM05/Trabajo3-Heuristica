@@ -7,39 +7,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  run-final-vnd:
-    name: Run program in final mode (VND only)
-    runs-on: ubuntu-latest
-    timeout-minutes: 540
-    env:
-      PYTHONUNBUFFERED: 1
-      FINAL_ALGO_MODE: vnd
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install openpyxl
-
-      - name: Run program in final mode (VND only)
-        run: python -c "import main; main.MODE='final'; main.main()"
-
-      - name: List generated Excel files
-        run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
-
-      - name: Upload generated Excel artifacts (final-vnd)
-        uses: actions/upload-artifact@v4
-        with:
-          name: nwjssp-excel-results-final-vnd
-          path: NWJSSP_ArturoMurgueytio_*.xlsx
 
   run-final-mslns:
     name: Run program in final mode (MS-LNS-SA only)
@@ -73,39 +40,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nwjssp-excel-results-final-mslns
-          path: NWJSSP_ArturoMurgueytio_*.xlsx
-
-  run-parametric:
-    name: Run program in parametric mode
-    runs-on: ubuntu-latest
-    timeout-minutes: 540
-    env:
-      PYTHONUNBUFFERED: 1
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install openpyxl
-
-      - name: Run program in parametric mode
-        run: python -c "import main; main.MODE='parametric'; main.main()"
-
-      - name: List generated Excel files
-        run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
-
-      - name: Upload generated Excel artifacts (parametric)
-        uses: actions/upload-artifact@v4
-        with:
-          name: nwjssp-excel-results-parametric
           path: NWJSSP_ArturoMurgueytio_*.xlsx
 
  
