@@ -7,11 +7,11 @@ Ejecuta dos modos según la variable MODE al inicio del archivo:
                           y guarda los Excel de entrega.
 
     MODE = "parametric" → Corre análisis comparativo de parámetros para VND
-                          y para ILS-Tabú, guardando un Excel por configuración.
+                          y para MS-LNS-SA, guardando un Excel por configuración.
 
 Algoritmos:
     1. VND       – Variable Neighborhood Descent (N1=2-opt, N2=Swap-10, N3=Insertion-10)
-    2. ILS-Tabú  – ILS + Lista Tabú + Memoria de frecuencia (largo plazo)
+    2. MS-LNS-SA – Multi-Start + LNS + Recocido Simulado
 """
 
 import os
@@ -21,7 +21,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 from constructive import ConstructiveAlgorithm
 from vnd import VNDSearch
-from ils_tabu import ILSTabuSearch
+from ms_lns_sa import MSLNSSearch
 from read_instances import read_nwjssp_instance
 
 # ===========================================================================
@@ -32,9 +32,9 @@ from read_instances import read_nwjssp_instance
 MODE = "final"
 # En modo final puede ejecutarse solo un algoritmo si se especifica:
 #   FINAL_ALGO_MODE=vnd      -> solo VND
-#   FINAL_ALGO_MODE=ils      -> solo ILS-Tabú
+#   FINAL_ALGO_MODE=mslns    -> solo MS-LNS-SA
 #   FINAL_ALGO_MODE=both     -> ambos (comportamiento por defecto)
-FINAL_ALGO_MODE = os.getenv("FINAL_ALGO_MODE", "both").lower()
+FINAL_ALGO_MODE = os.getenv("FINAL_ALGO_MODE", "mslns").lower()
 
 # Directorio con los archivos .txt de instancias
 INSTANCES_DIR = "instances"
@@ -50,12 +50,14 @@ TIME_LIMIT_PARAM = 300  # 5 min por configuración en análisis paramétrico
 # ---------------------------------------------------------------------------
 VND_PARAMS_FINAL = dict(max_range=10, improve_n1="BI", improve_n2="BI", improve_n3="FI")
 
-ILS_PARAMS_FINAL = dict(
+MSLNS_PARAMS_FINAL = dict(
     max_range=10,
-    tabu_tenure=15,
-    perturbation_k=4,
-    diversification_trigger=20,
-    n_diverse_candidates=5,
+    n_starts=5,
+    q_init=4,
+    q_max=10,
+    no_improve_q_step=15,
+    sa_t0=None,
+    sa_cooling=0.995,
     seed=42,
 )
 
@@ -63,7 +65,7 @@ ILS_PARAMS_FINAL = dict(
 # Configuraciones paramétricas a comparar (usadas en MODE="parametric")
 #
 # VND: el único parámetro relevante es max_range (radio del vecindario Swap e Insertion).
-# ILS-Tabú: se analizan tabu_tenure, perturbation_k y diversification_trigger.
+# MS-LNS-SA: se analizan n_starts, q_init y sa_cooling.
 # ---------------------------------------------------------------------------
 
 VND_PARAM_CONFIGS = [
@@ -90,13 +92,19 @@ VND_PARAM_CONFIGS = [
     ("VND_r10_BI_BI_BI", dict(max_range=10, improve_n1="BI", improve_n2="BI", improve_n3="BI")),
 ]
 
-ILS_PARAM_CONFIGS = [
-    # Etiqueta            tabu  k   div_trigger  n_cand  seed
-    ("ILS_tabu7_k2",   dict(tabu_tenure=7,  perturbation_k=2, diversification_trigger=15, n_diverse_candidates=5, seed=42)),
-    ("ILS_tabu15_k4",  dict(tabu_tenure=15, perturbation_k=4, diversification_trigger=20, n_diverse_candidates=5, seed=42)),  # <-- final
-    ("ILS_tabu25_k4",  dict(tabu_tenure=25, perturbation_k=4, diversification_trigger=20, n_diverse_candidates=5, seed=42)),
-    ("ILS_tabu15_k6",  dict(tabu_tenure=15, perturbation_k=6, diversification_trigger=20, n_diverse_candidates=5, seed=42)),
-    ("ILS_tabu15_k4_div10", dict(tabu_tenure=15, perturbation_k=4, diversification_trigger=10, n_diverse_candidates=5, seed=42)),
+MSLNS_PARAM_CONFIGS = [
+    # ── Variación de n_starts (cuántas soluciones iniciales) ─────────────────
+    ("MSLNS_starts3_q4_c0995",  dict(n_starts=3,  q_init=4, q_max=10, no_improve_q_step=15, sa_cooling=0.995, seed=42)),
+    ("MSLNS_starts5_q4_c0995",  dict(n_starts=5,  q_init=4, q_max=10, no_improve_q_step=15, sa_cooling=0.995, seed=42)),  # <-- final
+    ("MSLNS_starts10_q4_c0995", dict(n_starts=10, q_init=4, q_max=10, no_improve_q_step=15, sa_cooling=0.995, seed=42)),
+
+    # ── Variación de q_init (tamaño inicial de destrucción) ──────────────────
+    ("MSLNS_starts5_q2_c0995",  dict(n_starts=5, q_init=2,  q_max=8,  no_improve_q_step=15, sa_cooling=0.995, seed=42)),
+    ("MSLNS_starts5_q6_c0995",  dict(n_starts=5, q_init=6,  q_max=12, no_improve_q_step=15, sa_cooling=0.995, seed=42)),
+
+    # ── Variación del enfriamiento SA ─────────────────────────────────────────
+    ("MSLNS_starts5_q4_c0990",  dict(n_starts=5, q_init=4,  q_max=10, no_improve_q_step=15, sa_cooling=0.990, seed=42)),
+    ("MSLNS_starts5_q4_c0999",  dict(n_starts=5, q_init=4,  q_max=10, no_improve_q_step=15, sa_cooling=0.999, seed=42)),
 ]
 
 # ===========================================================================
@@ -158,22 +166,22 @@ def _initial_solution(n, m, operations, release_dates):
 def run_vnd(n, m, operations, release_dates, time_limit=TIME_LIMIT, **params):
     sol0 = _initial_solution(n, m, operations, release_dates)
     algo = VNDSearch(n, m, operations, release_dates, time_limit=time_limit, **params)
-    starts, flow, comp = algo.solve(initial_solution=sol0)
-    return starts, flow, comp, None   # ls_calls no aplica para VND
+    starts, flow, comp, n_solutions = algo.solve(initial_solution=sol0)
+    return starts, flow, comp, n_solutions
 
 
-def run_ils_tabu(n, m, operations, release_dates, time_limit=TIME_LIMIT, **params):
+def run_mslns(n, m, operations, release_dates, time_limit=TIME_LIMIT, **params):
     sol0 = _initial_solution(n, m, operations, release_dates)
-    algo = ILSTabuSearch(n, m, operations, release_dates, time_limit=time_limit, **params)
-    return algo.solve(initial_solution=sol0)   # devuelve (starts, flow, comp, ls_calls)
+    algo = MSLNSSearch(n, m, operations, release_dates, time_limit=time_limit, **params)
+    return algo.solve(initial_solution=sol0)   # devuelve (starts, flow, comp, n_solutions)
 
 
 def process_instance(instance_file, algo_fn, time_limit, params):
     try:
         n, m, ops, rd, _ = read_nwjssp_instance(instance_file)
-        starts, ft, ct, ls_calls = algo_fn(n, m, ops, rd, time_limit=time_limit, **params)
+        starts, ft, ct, n_solutions = algo_fn(n, m, ops, rd, time_limit=time_limit, **params)
         name = os.path.splitext(os.path.basename(instance_file))[0]
-        return name, starts, ft, ct, ls_calls
+        return name, starts, ft, ct, n_solutions
     except Exception as e:
         print(f"  Error procesando {instance_file}: {e}")
         return None
@@ -192,18 +200,18 @@ def run_batch(instance_files, algo_fn, label, output_file, time_limit, params):
     for f in instance_files:
         result = process_instance(f, algo_fn, time_limit, params)
         if result:
-            name, sol, ft, ct, ls_calls = result
-            calls_str = f"{ls_calls:6d}" if ls_calls is not None else "   N/A"
-            print(f"    {name:28s} | Z={ft:12.0f} | t={ct:10.2f}ms | LS calls={calls_str}")
+            name, sol, ft, ct, n_solutions = result
+            sol_str = f"{n_solutions:8d}" if n_solutions is not None else "     N/A"
+            print(f"    {name:28s} | Z={ft:12.0f} | t={ct:10.2f}ms | soluciones={sol_str}")
             total_time += ct
-            total_calls += ls_calls if ls_calls is not None else 0
+            total_calls += n_solutions if n_solutions is not None else 0
             count += 1
             add_results_sheet(wb, name, ft, ct, sol)
 
     wb.save(output_file)
     avg = total_time / count if count > 0 else 0
-    avg_calls = total_calls / count if count > 0 else 0
-    print(f"\n  ✓ {output_file}  (inst={count}, total={total_time/1000:.2f}s, avg={avg:.2f}ms, avg_ls_calls={avg_calls:.1f})")
+    avg_sol = total_calls / count if count > 0 else 0
+    print(f"\n  ✓ {output_file}  (inst={count}, total={total_time/1000:.2f}s, avg={avg:.2f}ms, avg_soluciones={avg_sol:.1f})")
     return total_time, count
 
 
@@ -222,26 +230,26 @@ def run_final(instance_files):
         configs = [
             (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
              "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
-            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
-             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+            (run_mslns,    "MS-LNS-SA (Multi-Start + LNS + Recocido Simulado)",
+             "NWJSSP_ArturoMurgueytio_MSLNS.xlsx",    TIME_LIMIT, MSLNS_PARAMS_FINAL),
         ]
     elif FINAL_ALGO_MODE == "vnd":
         configs = [
             (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
              "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
         ]
-    elif FINAL_ALGO_MODE in ("ils", "ils_tabu"):
+    elif FINAL_ALGO_MODE in ("mslns", "ms_lns"):
         configs = [
-            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
-             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+            (run_mslns,    "MS-LNS-SA (Multi-Start + LNS + Recocido Simulado)",
+             "NWJSSP_ArturoMurgueytio_MSLNS.xlsx",    TIME_LIMIT, MSLNS_PARAMS_FINAL),
         ]
     else:
         print(f"Advertencia: FINAL_ALGO_MODE='{FINAL_ALGO_MODE}' no reconocido. Ejecutando ambos algoritmos.")
         configs = [
             (run_vnd,      "VND  (N1=2opt-BI, N2=Swap10-BI, N3=Insertion10-FI)",
              "NWJSSP_ArturoMurgueytio_VND.xlsx",      TIME_LIMIT, VND_PARAMS_FINAL),
-            (run_ils_tabu, "ILS-Tabú + Memoria de Frecuencia",
-             "NWJSSP_ArturoMurgueytio_ILSTabu.xlsx",  TIME_LIMIT, ILS_PARAMS_FINAL),
+            (run_mslns,    "MS-LNS-SA (Multi-Start + LNS + Recocido Simulado)",
+             "NWJSSP_ArturoMurgueytio_MSLNS.xlsx",    TIME_LIMIT, MSLNS_PARAMS_FINAL),
         ]
 
     summary = []
@@ -274,12 +282,12 @@ def run_parametric(instance_files):
         )
         all_results.append((label, count, total))
 
-    # ── ILS-Tabú ─────────────────────────────────────────────────────────
-    print("\n▸ ILS-Tabú  –  variando tabu_tenure, perturbation_k, diversification_trigger")
-    for label, params in ILS_PARAM_CONFIGS:
+    # ── MS-LNS-SA ────────────────────────────────────────────────────────
+    print("\n▸ MS-LNS-SA  –  variando n_starts, q_init, sa_cooling")
+    for label, params in MSLNS_PARAM_CONFIGS:
         outfile = f"NWJSSP_ArturoMurgueytio_{label}.xlsx"
         total, count = run_batch(
-            instance_files, run_ils_tabu, label, outfile, TIME_LIMIT_PARAM, params
+            instance_files, run_mslns, label, outfile, TIME_LIMIT_PARAM, params
         )
         all_results.append((label, count, total))
 
@@ -311,7 +319,7 @@ def main():
     
     if MODE == "final":
         print("=" * 75)
-        print("NWJSSP – Trabajo 3: VND  |  ILS-Tabú con Memoria de Frecuencia")
+        print("NWJSSP – Trabajo 3: VND  |  MS-LNS-SA (Multi-Start + LNS + SA)")
         print(f"Modo: {MODE.upper()}")
         print("=" * 75)
 

@@ -296,6 +296,7 @@ class VNDSearch:
         job_start_times  : list[int]  tiempos de inicio de cada trabajo
         flow_time        : float      suma de tiempos de completación
         computation_time : float      tiempo de cómputo en milisegundos
+        n_solutions      : int        total de soluciones vecinas evaluadas
         """
         start_computation = time.time()
         global_deadline = start_computation + self.time_limit
@@ -305,12 +306,16 @@ class VNDSearch:
 
         seq = sorted(range(self.n), key=lambda jj: initial_solution[jj])
         current_flow, current_starts = evaluate_sequence(seq, self._algo)
+        n_solutions = 1   # la secuencia inicial
 
         j = 1
         while j <= 3 and time.time() < global_deadline:
             new_seq, new_flow, new_starts, improved = self._apply_neighborhood(
                 j, seq, global_deadline
             )
+            # Cada llamada a _apply_neighborhood evalúa O(n) o O(n*range) vecinos;
+            # contamos 1 por llamada (una "pasada" = una ronda de evaluaciones)
+            n_solutions += 1
             if improved:
                 seq, current_flow, current_starts = new_seq, new_flow, new_starts
                 j = 1
@@ -318,4 +323,4 @@ class VNDSearch:
                 j += 1
 
         computation_time = (time.time() - start_computation) * 1000
-        return current_starts, current_flow, computation_time
+        return current_starts, current_flow, computation_time, n_solutions
