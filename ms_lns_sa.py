@@ -198,6 +198,8 @@ def _repair(partial_seq, removed_jobs, algo, deadline, repair_window=None):
         best_pos  = current_len   # fallback: insertar al final
 
         for pos in pos_range:
+            if time.time() >= deadline:   # ← chequeo dentro del loop de posiciones
+                break
             candidate = seq[:pos] + [job] + seq[pos:]
             flow, _ = evaluate_sequence(candidate, algo)
             n_eval += 1
@@ -371,21 +373,29 @@ class MSLNSSearch:
             partial, removed = _destroy(cur_seq, q, self.rng)
 
             # ── REPARACIÓN con ventana restringida ────────────────────
-            # Asignar 60% del presupuesto de la iteración a la reparación
-            repair_dl = min(iter_deadline, iter_start + budget * 0.6)
+            # Se usa el deadline global directamente para garantizar que
+            # nunca se exceda el tiempo límite, independientemente del budget.
+            repair_dl = min(deadline, iter_start + budget * 0.6)
             new_seq, ev = _repair(
                 partial, removed, self._algo, repair_dl,
                 repair_window=self.repair_window
             )
             n_eval += ev
 
+            # Si el deadline global ya pasó, no seguir procesando
+            if time.time() >= deadline:
+                break
+
             # ── Búsqueda local post-reparación (solo N1, liviana) ─────
-            # Asignar 35% del presupuesto a la búsqueda local
-            ls_dl = min(iter_deadline, time.time() + budget * 0.35)
+            ls_dl = min(deadline, time.time() + budget * 0.35)
             new_seq, new_flow, new_starts, ev2 = _quick_local_search(
                 new_seq, self._algo, self.max_range, ls_dl, full=False
             )
             n_eval += ev2
+
+            # Si el deadline global ya pasó, no seguir procesando
+            if time.time() >= deadline:
+                break
 
             # ── CRITERIO DE ACEPTACIÓN (Simulated Annealing) ──────────
             delta = new_flow - cur_flow
