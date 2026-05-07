@@ -8,13 +8,14 @@ env:
 
 jobs:
 
-  run-final-mslns:
-    name: Run program in final mode (MS-LNS-SA only)
+  run-final-instances:
+    name: Run program in final mode (instances)
     runs-on: ubuntu-latest
     timeout-minutes: 540
     env:
       PYTHONUNBUFFERED: 1
       FINAL_ALGO_MODE: mslns
+      INSTANCES_DIR: instances
 
     steps:
       - name: Checkout repository
@@ -30,16 +31,121 @@ jobs:
           python -m pip install --upgrade pip
           pip install openpyxl
 
-      - name: Run program in final mode (MS-LNS-SA only)
+      - name: Run program in final mode (instances)
         run: python -c "import main; main.MODE='final'; main.main()"
 
       - name: List generated Excel files
         run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
 
-      - name: Upload generated Excel artifacts (final-mslns)
+      - name: Upload generated Excel artifacts (final-instances)
         uses: actions/upload-artifact@v4
         with:
-          name: nwjssp-excel-results-final-mslns
+          name: nwjssp-excel-results-final-instances
+          path: NWJSSP_ArturoMurgueytio_*.xlsx
+
+  run-final-big1:
+    name: Run program in final mode (instances_big1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 540
+    env:
+      PYTHONUNBUFFERED: 1
+      FINAL_ALGO_MODE: mslns
+      INSTANCES_DIR: instances_big1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install openpyxl
+
+      - name: Run program in final mode (instances_big1)
+        run: python -c "import main; main.MODE='final'; main.main()"
+
+      - name: List generated Excel files
+        run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
+
+      - name: Upload generated Excel artifacts (final-big1)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nwjssp-excel-results-final-big1
+          path: NWJSSP_ArturoMurgueytio_*.xlsx
+
+  run-final-big2:
+    name: Run program in final mode (instances_big2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 540
+    env:
+      PYTHONUNBUFFERED: 1
+      FINAL_ALGO_MODE: mslns
+      INSTANCES_DIR: instances_big2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install openpyxl
+
+      - name: Run program in final mode (instances_big2)
+        run: python -c "import main; main.MODE='final'; main.main()"
+
+      - name: List generated Excel files
+        run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
+
+      - name: Upload generated Excel artifacts (final-big2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nwjssp-excel-results-final-big2
+          path: NWJSSP_ArturoMurgueytio_*.xlsx
+
+  run-final-big3:
+    name: Run program in final mode (instances_big3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 540
+    env:
+      PYTHONUNBUFFERED: 1
+      FINAL_ALGO_MODE: mslns
+      INSTANCES_DIR: instances_big3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install openpyxl
+
+      - name: Run program in final mode (instances_big3)
+        run: python -c "import main; main.MODE='final'; main.main()"
+
+      - name: List generated Excel files
+        run: find . -maxdepth 2 -name 'NWJSSP_ArturoMurgueytio_*.xlsx' -print
+
+      - name: Upload generated Excel artifacts (final-big3)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nwjssp-excel-results-final-big3
           path: NWJSSP_ArturoMurgueytio_*.xlsx
 
  

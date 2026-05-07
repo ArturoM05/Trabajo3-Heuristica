@@ -37,8 +37,8 @@ MODE = "final"
 FINAL_ALGO_MODE = os.getenv("FINAL_ALGO_MODE", "mslns").lower()
 
 # Directorio con los archivos .txt de instancias
-INSTANCES_DIR = "instances"
-INSTANCES_DIR_PARA = "instances_parametric"  
+INSTANCES_DIR = os.getenv("INSTANCES_DIR", "instances")
+INSTANCES_DIR_PARA = os.getenv("INSTANCES_DIR_PARA", "instances_parametric")
 
 # Tiempo límite POR EJECUCIÓN de algoritmo (segundos)
 TIME_LIMIT = 3600   # 1 hora  (modo final)
